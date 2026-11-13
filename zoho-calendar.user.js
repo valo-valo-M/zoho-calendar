@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho Calendar - mobilny tyzdenny prehlad
 // @namespace    zoho-calendar-tools
-// @version      1.5
+// @version      1.7
 // @description  Zvisly mobilny kalendar (iPhone Safari) s povodnymi Zoho zaznamami
 // @match        https://creatorapp.zoho.com/michalbokovi/service-system/*
 // @run-at       document-idle
