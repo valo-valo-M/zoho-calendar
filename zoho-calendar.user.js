@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho Calendar - mobilny tyzdenny prehlad
 // @namespace    zoho-calendar-tools
-// @version      1.1
+// @version      1.2
 // @description  Zvisly mobilny kalendar s povodnymi Zoho zaznamami
 // @match        https://creatorapp.zoho.com/michalbokovi/service-system/*
 // @run-at       document-idle
@@ -271,27 +271,53 @@
     }
 
     function start() {
-        const calendar = getCalendar();
+    const calendar = getCalendar();
+    const jq = window.jQuery || window.$;
 
-        if (!calendar) {
+    if (!calendar || !jq || !jq.fn || !jq.fn.fullCalendar) {
+        setTimeout(start, 500);
+        return;
+    }
+
+    try {
+        const view = jq(calendar).fullCalendar('getView');
+
+        if (!view || view.name !== 'agendaWeek') {
+            jq(calendar).fullCalendar('changeView', 'agendaWeek');
             setTimeout(start, 500);
             return;
         }
-
-        buildCalendar();
-
-        const observer = new MutationObserver(scheduleUpdate);
-
-        observer.observe(calendar, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ['data-date']
-        });
-
-        // Záložná kontrola pri zmene týždňa alebo filtra.
-        setInterval(buildCalendar, 3000);
+    } catch (error) {
+        setTimeout(start, 500);
+        return;
     }
+
+    buildCalendar();
+
+    const observer = new MutationObserver(scheduleUpdate);
+
+    observer.observe(calendar, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['data-date']
+    });
+
+    setInterval(function () {
+        try {
+            const view = jq(calendar).fullCalendar('getView');
+
+            if (!view || view.name !== 'agendaWeek') {
+                jq(calendar).fullCalendar('changeView', 'agendaWeek');
+                return;
+            }
+
+            buildCalendar();
+        } catch (error) {
+            buildCalendar();
+        }
+    }, 3000);
+}
 
     start();
 })();
