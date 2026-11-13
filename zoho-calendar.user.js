@@ -1,7 +1,8 @@
+
 // ==UserScript==
 // @name         Zoho Calendar - mobilny tyzdenny prehlad
 // @namespace    zoho-calendar-tools
-// @version      1.2
+// @version      1.3
 // @description  Zvisly mobilny kalendar s povodnymi Zoho zaznamami
 // @match        https://creatorapp.zoho.com/michalbokovi/service-system/*
 // @run-at       document-idle
@@ -55,7 +56,7 @@
             #${PANEL_ID} {
                 width: 100%;
                 box-sizing: border-box;
-                padding: 8px 10px 24px;
+                padding: 4px 6px 12px;
                 background: var(--app-background, #fff);
                 color: var(--primary-text-color, #222);
             }
@@ -70,17 +71,17 @@
             }
 
             #${PANEL_ID} .zmc-day {
-                margin: 0 0 12px;
+                margin: 0 0 6px;
                 border: 1px solid #d6d6d6;
-                border-radius: 9px;
+                border-radius: 6px;
                 overflow: hidden;
                 background: var(--card-background-color, #fff);
             }
 
             #${PANEL_ID} .zmc-day-header {
-                padding: 11px 12px;
+                padding: 6px 9px;
                 font-weight: 700;
-                font-size: 15px;
+                font-size: 13px;
                 text-transform: capitalize;
                 background: #eeeeee;
                 color: #222;
@@ -92,31 +93,31 @@
 
             #${PANEL_ID} .zmc-event {
                 display: block;
-                width: calc(100% - 16px);
+                width: calc(100% - 12px);
                 box-sizing: border-box;
-                margin: 8px;
-                padding: 12px;
+                margin: 5px 6px;
+                padding: 7px 9px;
                 border: 0;
-                border-left: 6px solid #00c90d;
-                border-radius: 6px;
+                border-left: 4px solid #00c90d;
+                border-radius: 4px;
                 background: #e8f7e9;
                 color: #111;
                 text-align: left;
-                font-size: 15px;
+                font-size: 13px;
                 font-weight: 600;
-                line-height: 1.35;
+                line-height: 1.25;
                 cursor: pointer;
                 overflow-wrap: anywhere;
             }
 
             #${PANEL_ID} .zmc-empty {
-                padding: 10px 12px;
+                padding: 6px 9px;
                 color: #888;
-                font-size: 13px;
+                font-size: 12px;
             }
 
             #${PANEL_ID} .zmc-error {
-                padding: 12px;
+                padding: 10px;
                 color: #b00020;
             }
         `;
@@ -271,53 +272,53 @@
     }
 
     function start() {
-    const calendar = getCalendar();
-    const jq = window.jQuery || window.$;
+        const calendar = getCalendar();
+        const jq = window.jQuery || window.$;
 
-    if (!calendar || !jq || !jq.fn || !jq.fn.fullCalendar) {
-        setTimeout(start, 500);
-        return;
-    }
-
-    try {
-        const view = jq(calendar).fullCalendar('getView');
-
-        if (!view || view.name !== 'agendaWeek') {
-            jq(calendar).fullCalendar('changeView', 'agendaWeek');
+        if (!calendar || !jq || !jq.fn || !jq.fn.fullCalendar) {
             setTimeout(start, 500);
             return;
         }
-    } catch (error) {
-        setTimeout(start, 500);
-        return;
-    }
 
-    buildCalendar();
-
-    const observer = new MutationObserver(scheduleUpdate);
-
-    observer.observe(calendar, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['data-date']
-    });
-
-    setInterval(function () {
         try {
             const view = jq(calendar).fullCalendar('getView');
 
             if (!view || view.name !== 'agendaWeek') {
                 jq(calendar).fullCalendar('changeView', 'agendaWeek');
+                setTimeout(start, 500);
                 return;
             }
-
-            buildCalendar();
         } catch (error) {
-            buildCalendar();
+            setTimeout(start, 500);
+            return;
         }
-    }, 3000);
-}
+
+        buildCalendar();
+
+        const observer = new MutationObserver(scheduleUpdate);
+
+        observer.observe(calendar, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['data-date']
+        });
+
+        setInterval(function () {
+            try {
+                const view = jq(calendar).fullCalendar('getView');
+
+                if (!view || view.name !== 'agendaWeek') {
+                    jq(calendar).fullCalendar('changeView', 'agendaWeek');
+                    return;
+                }
+
+                buildCalendar();
+            } catch (error) {
+                buildCalendar();
+            }
+        }, 3000);
+    }
 
     start();
 })();
