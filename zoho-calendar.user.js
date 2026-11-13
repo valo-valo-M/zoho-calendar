@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho Calendar - mobilny tyzdenny prehlad
 // @namespace    zoho-calendar-tools
-// @version      1.9
+// @version      2.0
 // @description  Zvisly mobilny kalendar (iPhone Safari) s povodnymi Zoho zaznamami
 // @match        https://creatorapp.zoho.com/michalbokovi/service-system/*
 // @run-at       document-start
@@ -631,6 +631,26 @@
         window.addEventListener('orientationchange', scheduleUpdate);
     }
 
+    // Horny banner "Otvorit v aplikacii Creator" je Safari Smart App Banner,
+    // ktory vznika z <meta name="apple-itunes-app">. Zahodime ho co najskor.
+    function removeAppBanner() {
+        const kill = function () {
+            document.querySelectorAll('meta[name="apple-itunes-app"]')
+                .forEach(function (m) { m.remove(); });
+        };
+
+        kill();
+
+        const mo = new MutationObserver(kill);
+        mo.observe(document.documentElement, { childList: true, subtree: true });
+
+        document.addEventListener('DOMContentLoaded', function () {
+            kill();
+            setTimeout(function () { mo.disconnect(); }, 5000);
+        });
+    }
+
+    removeAppBanner();
     installDarkMode();
     start();
 })();
