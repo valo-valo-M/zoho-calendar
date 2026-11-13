@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Zoho Calendar - mobilny tyzdenny prehlad
 // @namespace    zoho-calendar-tools
-// @version      1.8
+// @version      1.9
 // @description  Zvisly mobilny kalendar (iPhone Safari) s povodnymi Zoho zaznamami
 // @match        https://creatorapp.zoho.com/michalbokovi/service-system/*
-// @run-at       document-idle
+// @run-at       document-start
 // @grant        none
 // @updateURL    https://raw.githubusercontent.com/valo-valo-M/zoho-calendar/main/zoho-calendar.meta.js
 // @downloadURL  https://raw.githubusercontent.com/valo-valo-M/zoho-calendar/main/zoho-calendar.user.js
@@ -18,6 +18,41 @@
 
     const STYLE_ID = 'zoho-mobile-calendar-style';
     const PANEL_ID = 'zoho-mobile-calendar';
+    const DARK_STYLE_ID = 'zoho-mobile-calendar-dark';
+
+    // true = cela stranka Zoho v tmavom rezime, false = povodny svetly vzhlad
+    const DARK_MODE = true;
+
+    // Tmavy rezim cez invertovanie farieb celej stranky (Zoho nema vlastny
+    // tmavy rezim). Obrazky, video a nas panel sa invertuju spat, takze
+    // zostanu v peknych farbach.
+    function installDarkMode() {
+        if (!DARK_MODE) return;
+
+        const root = document.documentElement;
+        root.classList.add('zmc-dark');
+
+        if (document.getElementById(DARK_STYLE_ID)) return;
+
+        const style = document.createElement('style');
+        style.id = DARK_STYLE_ID;
+        style.textContent = `
+            html.zmc-dark {
+                background: #ffffff;
+                filter: invert(1) hue-rotate(180deg);
+            }
+
+            html.zmc-dark img,
+            html.zmc-dark picture,
+            html.zmc-dark video,
+            html.zmc-dark canvas,
+            html.zmc-dark [style*="background-image"],
+            html.zmc-dark #${PANEL_ID} {
+                filter: invert(1) hue-rotate(180deg);
+            }
+        `;
+        root.appendChild(style);
+    }
 
     let lastSignature = '';
     let observedCalendar = null;
@@ -84,16 +119,18 @@
                 -webkit-font-smoothing: antialiased;
             }
 
-            @media (prefers-color-scheme: dark) {
-                #${PANEL_ID} {
-                    --zmc-bg: #1c1c1e;
-                    --zmc-text: #f2f2f7;
-                    --zmc-muted: #8e8e93;
-                    --zmc-line: #38383a;
-                    --zmc-label-bg: #2c2c2e;
-                    --zmc-accent: #0a84ff;
-                    --zmc-shadow: none;
-                }
+            html.zmc-dark #${PANEL_ID} {
+                --zmc-bg: #1c1c1e;
+                --zmc-text: #f2f2f7;
+                --zmc-muted: #98989f;
+                --zmc-line: #38383a;
+                --zmc-label-bg: #2c2c2e;
+                --zmc-accent: #0a84ff;
+                --zmc-shadow: none;
+            }
+
+            html.zmc-dark #${PANEL_ID} .zmc-event::before {
+                opacity: 0.28;
             }
 
             #${PANEL_ID} * {
@@ -594,5 +631,6 @@
         window.addEventListener('orientationchange', scheduleUpdate);
     }
 
+    installDarkMode();
     start();
 })();
