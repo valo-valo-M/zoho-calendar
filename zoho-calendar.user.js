@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho Calendar - mobilny tyzdenny prehlad
 // @namespace    zoho-calendar-tools
-// @version      2.3
+// @version      2.4
 // @description  Zvisly mobilny kalendar (iPhone Safari) ako v aplikacii, s filtrom
 // @match        https://creatorapp.zoho.com/michalbokovi/service-system/*
 // @run-at       document-start
@@ -26,7 +26,6 @@
 
     const DEFAULT_COLOR = '#6a67ae';
 
-    let query = '';
     let lastSignature = '';
     let observedCalendar = null;
     let observer = null;
@@ -57,22 +56,6 @@
             String(t.getMonth() + 1).padStart(2, '0'),
             String(t.getDate()).padStart(2, '0')
         ].join('-');
-    }
-
-    // Male pismena bez diakritiky, na filtrovanie
-    function norm(text) {
-        return String(text || '')
-            .normalize('NFD')
-            .replace(/[\u0300-\u036f]/g, '')
-            .toLowerCase();
-    }
-
-    function matchesQuery(title) {
-        const words = norm(query).split(/\s+/).filter(Boolean);
-        if (!words.length) return true;
-
-        const hay = norm(title);
-        return words.every(function (w) { return hay.indexOf(w) !== -1; });
     }
 
     /* ------------------------------------------------------------------ */
@@ -194,46 +177,6 @@
                 box-sizing: border-box;
             }
 
-            /* ---- Filter ---- */
-            #${PANEL_ID} .zmc-bar {
-                position: relative;
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                padding: 8px max(10px, env(safe-area-inset-right)) 8px
-                         max(10px, env(safe-area-inset-left));
-                background: var(--zmc-page);
-                border-bottom: 1px solid var(--zmc-line);
-            }
-
-            #${PANEL_ID} .zmc-filter {
-                flex: 1 1 auto;
-                min-width: 0;
-                height: 36px;
-                margin: 0;
-                padding: 0 12px;
-                border: 0;
-                border-radius: 10px;
-                background: var(--zmc-field);
-                color: var(--zmc-text);
-                font-family: inherit;
-                font-size: 16px; /* 16px = iOS pri focuse nezoomuje */
-                outline: none;
-                -webkit-appearance: none;
-                appearance: none;
-            }
-
-            #${PANEL_ID} .zmc-filter::placeholder {
-                color: var(--zmc-muted);
-            }
-
-            #${PANEL_ID} .zmc-count {
-                flex: 0 0 auto;
-                font-size: 12px;
-                color: var(--zmc-muted);
-                white-space: nowrap;
-            }
-
             /* ---- Den ---- */
             #${PANEL_ID} .zmc-day {
                 display: flex;
@@ -323,8 +266,7 @@
     /* Panel                                                              */
     /* ------------------------------------------------------------------ */
 
-    // Vrati kontajner so zoznamom dni. Panel (a v nom filter) sa vytvori
-    // len raz, aby pri prekresleni neprisiel filter o focus.
+    // Vrati kontajner so zoznamom dni. Panel sa vytvori len raz.
     function ensureList(calendar) {
         let panel = document.getElementById(PANEL_ID);
 
@@ -337,35 +279,9 @@
             panel = document.createElement('div');
             panel.id = PANEL_ID;
 
-            const bar = document.createElement('div');
-            bar.className = 'zmc-bar';
-
-            const input = document.createElement('input');
-            input.type = 'search';
-            input.className = 'zmc-filter';
-            input.placeholder = 'Filtrovať udalosti…';
-            input.autocomplete = 'off';
-            input.autocapitalize = 'off';
-            input.spellcheck = false;
-            input.setAttribute('enterkeyhint', 'search');
-            input.value = query;
-
-            input.addEventListener('input', function () {
-                query = input.value;
-                lastSignature = '';
-                buildCalendar();
-            });
-
-            const count = document.createElement('span');
-            count.className = 'zmc-count';
-
-            bar.appendChild(input);
-            bar.appendChild(count);
-
             const list = document.createElement('div');
             list.className = 'zmc-list';
 
-            panel.appendChild(bar);
             panel.appendChild(list);
 
             calendar.insertAdjacentElement('afterend', panel);
@@ -536,7 +452,6 @@
         // Podpis: prekreslime len ked sa nieco zmenilo
         const signature = JSON.stringify([
             todayKey(),
-            query,
             dates,
             events.map(function (e) {
                 return [
@@ -570,25 +485,11 @@
         const groups = groupByDay(events, dates);
         const today = todayKey();
 
-        let total = 0;
-        let shown = 0;
-
         dates.forEach(function (date) {
-            const all = groups[date] || [];
-            const visible = all.filter(function (e) {
-                return matchesQuery(e.title || e.description || '');
-            });
-
-            total += all.length;
-            shown += visible.length;
-
-            list.appendChild(buildDay(date, visible, today, originalLinks));
+            list.appendChild(
+                buildDay(date, groups[date] || [], today, originalLinks)
+            );
         });
-
-        const count = document.querySelector('#' + PANEL_ID + ' .zmc-count');
-        if (count) {
-            count.textContent = query.trim() ? shown + ' / ' + total : 'Udalostí: ' + total;
-        }
     }
 
     /* ------------------------------------------------------------------ */
