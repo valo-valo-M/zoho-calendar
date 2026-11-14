@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Zoho Calendar - mobilny tyzdenny prehlad
 // @namespace    zoho-calendar-tools
-// @version      2.0
-// @description  Zvisly mobilny kalendar (iPhone Safari) s povodnymi Zoho zaznamami
+// @version      2.1
+// @description  Zvisly mobilny kalendar (iPhone Safari) ako v aplikacii, s filtrom
 // @match        https://creatorapp.zoho.com/michalbokovi/service-system/*
 // @run-at       document-start
 // @grant        none
@@ -17,15 +17,107 @@
     window.__zohoCalendarMobileInstalled = true;
 
     const STYLE_ID = 'zoho-mobile-calendar-style';
-    const PANEL_ID = 'zoho-mobile-calendar';
     const DARK_STYLE_ID = 'zoho-mobile-calendar-dark';
+    const PANEL_ID = 'zoho-mobile-calendar';
 
     // true = cela stranka Zoho v tmavom rezime, false = povodny svetly vzhlad
     const DARK_MODE = true;
 
-    // Tmavy rezim cez invertovanie farieb celej stranky (Zoho nema vlastny
-    // tmavy rezim). Obrazky, video a nas panel sa invertuju spat, takze
-    // zostanu v peknych farbach.
+    const DEFAULT_COLOR = '#34c759';
+
+    let query = '';
+    let lastSignature = '';
+    let observedCalendar = null;
+    let observer = null;
+    let updateTimer = null;
+
+    /* ------------------------------------------------------------------ */
+    /* Pomocne funkcie                                                    */
+    /* ------------------------------------------------------------------ */
+
+    function getCalendar() {
+        return document.querySelector('#Kalendar_calendar');
+    }
+
+    function getJq() {
+        const jq = window.jQuery || window.$;
+        return jq && jq.fn && jq.fn.fullCalendar ? jq : null;
+    }
+
+    function parseKey(key) {
+        const p = key.split('-').map(Number);
+        return new Date(p[0], p[1] - 1, p[2]);
+    }
+
+    function todayKey() {
+        const t = new Date();
+        return [
+            t.getFullYear(),
+            String(t.getMonth() + 1).padStart(2, '0'),
+            String(t.getDate()).padStart(2, '0')
+        ].join('-');
+    }
+
+    // Male pismena bez diakritiky, na filtrovanie
+    function norm(text) {
+        return String(text || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase();
+    }
+
+    function matchesQuery(title) {
+        const words = norm(query).split(/\s+/).filter(Boolean);
+        if (!words.length) return true;
+
+        const hay = norm(title);
+        return words.every(function (w) { return hay.indexOf(w) !== -1; });
+    }
+
+    // Farba textu (biela / tmava) podla svetlosti pozadia stitku
+    const textColorCache = {};
+    let colorCtx = null;
+
+    function textColorFor(color) {
+        const key = color || DEFAULT_COLOR;
+        if (textColorCache[key]) return textColorCache[key];
+
+        let result = '#ffffff';
+
+        try {
+            if (!colorCtx) {
+                const canvas = document.createElement('canvas');
+                canvas.width = canvas.height = 1;
+                colorCtx = canvas.getContext('2d');
+            }
+
+            colorCtx.clearRect(0, 0, 1, 1);
+            colorCtx.fillStyle = '#000000';
+            colorCtx.fillStyle = key;
+            colorCtx.fillRect(0, 0, 1, 1);
+
+            const d = colorCtx.getImageData(0, 0, 1, 1).data;
+            const lin = function (v) {
+                v /= 255;
+                return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+            };
+            const lum = 0.2126 * lin(d[0]) + 0.7152 * lin(d[1]) + 0.0722 * lin(d[2]);
+
+            result = lum > 0.4 ? '#111111' : '#ffffff';
+        } catch (error) {
+            result = '#ffffff';
+        }
+
+        textColorCache[key] = result;
+        return result;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Tmavy rezim a banner                                               */
+    /* ------------------------------------------------------------------ */
+
+    // Zoho nema vlastny tmavy rezim, preto invertujeme farby celej stranky.
+    // Obrazky, video a nas panel sa invertuju spat.
     function installDarkMode() {
         if (!DARK_MODE) return;
 
@@ -54,33 +146,28 @@
         root.appendChild(style);
     }
 
-    let lastSignature = '';
-    let observedCalendar = null;
-    let observer = null;
-    let updateTimer = null;
+    // Horny banner "Otvorit v aplikacii Creator" je Safari Smart App Banner
+    // z <meta name="apple-itunes-app">. Zahodime ho co najskor.
+    function removeAppBanner() {
+        const kill = function () {
+            document.querySelectorAll('meta[name="apple-itunes-app"]')
+                .forEach(function (m) { m.remove(); });
+        };
 
-    function getCalendar() {
-        return document.querySelector('#Kalendar_calendar');
+        kill();
+
+        const mo = new MutationObserver(kill);
+        mo.observe(document.documentElement, { childList: true, subtree: true });
+
+        document.addEventListener('DOMContentLoaded', function () {
+            kill();
+            setTimeout(function () { mo.disconnect(); }, 5000);
+        });
     }
 
-    function getJq() {
-        const jq = window.jQuery || window.$;
-        return jq && jq.fn && jq.fn.fullCalendar ? jq : null;
-    }
-
-    function parseKey(key) {
-        const p = key.split('-').map(Number);
-        return new Date(p[0], p[1] - 1, p[2]);
-    }
-
-    function todayKey() {
-        const t = new Date();
-        return [
-            t.getFullYear(),
-            String(t.getMonth() + 1).padStart(2, '0'),
-            String(t.getDate()).padStart(2, '0')
-        ].join('-');
-    }
+    /* ------------------------------------------------------------------ */
+    /* Styl                                                               */
+    /* ------------------------------------------------------------------ */
 
     function installStyle() {
         if (document.getElementById(STYLE_ID)) return;
@@ -98,244 +185,159 @@
             }
 
             #${PANEL_ID} {
-                --zmc-bg: #ffffff;
+                --zmc-page: #ffffff;
                 --zmc-text: #1c1c1e;
                 --zmc-muted: #8e8e93;
                 --zmc-line: #e5e5ea;
-                --zmc-label-bg: #f2f2f7;
+                --zmc-field: #f2f2f7;
                 --zmc-accent: #007aff;
-                --zmc-accent-text: #ffffff;
-                --zmc-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+                --zmc-today: rgba(0, 122, 255, 0.08);
 
                 width: 100%;
                 box-sizing: border-box;
-                padding: 6px max(8px, env(safe-area-inset-right))
-                         calc(14px + env(safe-area-inset-bottom))
-                         max(8px, env(safe-area-inset-left));
+                padding-bottom: env(safe-area-inset-bottom);
+                background: var(--zmc-page);
+                color: var(--zmc-text);
                 font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text",
                              "Helvetica Neue", Arial, sans-serif;
-                color: var(--zmc-text);
                 -webkit-text-size-adjust: 100%;
                 -webkit-font-smoothing: antialiased;
             }
 
             html.zmc-dark #${PANEL_ID} {
-                --zmc-bg: #1c1c1e;
+                --zmc-page: #000000;
                 --zmc-text: #f2f2f7;
                 --zmc-muted: #98989f;
-                --zmc-line: #38383a;
-                --zmc-label-bg: #2c2c2e;
+                --zmc-line: #2c2c2e;
+                --zmc-field: #1c1c1e;
                 --zmc-accent: #0a84ff;
-                --zmc-shadow: none;
-            }
-
-            html.zmc-dark #${PANEL_ID} .zmc-event::before {
-                opacity: 0.28;
+                --zmc-today: rgba(10, 132, 255, 0.16);
             }
 
             #${PANEL_ID} * {
                 box-sizing: border-box;
             }
 
+            /* ---- Filter ---- */
+            #${PANEL_ID} .zmc-bar {
+                position: sticky;
+                top: 0;
+                z-index: 5;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 8px max(10px, env(safe-area-inset-right)) 8px
+                         max(10px, env(safe-area-inset-left));
+                background: var(--zmc-page);
+                border-bottom: 1px solid var(--zmc-line);
+            }
+
+            #${PANEL_ID} .zmc-filter {
+                flex: 1 1 auto;
+                min-width: 0;
+                height: 36px;
+                margin: 0;
+                padding: 0 12px;
+                border: 0;
+                border-radius: 10px;
+                background: var(--zmc-field);
+                color: var(--zmc-text);
+                font-family: inherit;
+                font-size: 16px; /* 16px = iOS pri focuse nezoomuje */
+                outline: none;
+                -webkit-appearance: none;
+                appearance: none;
+            }
+
+            #${PANEL_ID} .zmc-filter::placeholder {
+                color: var(--zmc-muted);
+            }
+
+            #${PANEL_ID} .zmc-count {
+                flex: 0 0 auto;
+                font-size: 12px;
+                color: var(--zmc-muted);
+                white-space: nowrap;
+            }
+
             /* ---- Den ---- */
             #${PANEL_ID} .zmc-day {
                 display: flex;
                 align-items: stretch;
-                margin: 0 0 8px;
-                background: var(--zmc-bg);
-                border: 1px solid var(--zmc-line);
-                border-radius: 14px;
-                overflow: hidden;
-                box-shadow: var(--zmc-shadow);
+                min-height: 54px;
+                border-bottom: 1px solid var(--zmc-line);
             }
 
             #${PANEL_ID} .zmc-today {
-                border-color: var(--zmc-accent);
-                box-shadow: 0 0 0 1px var(--zmc-accent);
+                background: var(--zmc-today);
             }
 
-            /* Lavy stlpec s datumom */
             #${PANEL_ID} .zmc-date {
-                flex: 0 0 52px;
+                flex: 0 0 54px;
                 display: flex;
                 flex-direction: column;
                 align-items: center;
                 justify-content: center;
-                padding: 8px 0;
-                background: var(--zmc-label-bg);
+                padding: 6px 0;
+                border-right: 1px solid var(--zmc-line);
+                font-size: 15px;
+                line-height: 1.3;
                 text-align: center;
-                line-height: 1.1;
             }
 
             #${PANEL_ID} .zmc-wd {
-                font-size: 11px;
-                font-weight: 700;
-                letter-spacing: 0.04em;
-                text-transform: uppercase;
                 color: var(--zmc-muted);
             }
 
-            #${PANEL_ID} .zmc-num {
-                margin: 3px 0 2px;
-                min-width: 30px;
-                height: 30px;
-                line-height: 30px;
-                border-radius: 15px;
-                font-size: 19px;
-                font-weight: 700;
-                color: var(--zmc-text);
-            }
-
-            #${PANEL_ID} .zmc-mon {
-                font-size: 10px;
-                color: var(--zmc-muted);
-            }
-
+            #${PANEL_ID} .zmc-today .zmc-date,
             #${PANEL_ID} .zmc-today .zmc-wd {
                 color: var(--zmc-accent);
+                font-weight: 700;
             }
 
-            #${PANEL_ID} .zmc-today .zmc-num {
-                background: var(--zmc-accent);
-                color: var(--zmc-accent-text);
-            }
-
-            #${PANEL_ID} .zmc-weekend .zmc-wd,
-            #${PANEL_ID} .zmc-weekend .zmc-num {
-                color: #ff3b30;
-            }
-
-            #${PANEL_ID} .zmc-today.zmc-weekend .zmc-num {
-                color: var(--zmc-accent-text);
-            }
-
-            /* Pravy stlpec s udalostami */
+            /* ---- Stitky udalosti ---- */
             #${PANEL_ID} .zmc-events {
                 flex: 1 1 auto;
                 min-width: 0;
-                padding: 6px;
                 display: flex;
-                flex-direction: column;
-                justify-content: center;
+                flex-wrap: wrap;
+                align-content: center;
                 gap: 6px;
+                padding: 8px;
             }
 
-            #${PANEL_ID} .zmc-empty {
-                padding: 6px 4px;
-                font-size: 13px;
-                color: var(--zmc-muted);
-            }
-
-            /* Prazdny den je nizsi a tlmeny */
-            #${PANEL_ID} .zmc-day.zmc-none .zmc-date {
-                flex-basis: 52px;
-                flex-direction: row;
-                gap: 5px;
-                padding: 6px 0;
-            }
-
-            #${PANEL_ID} .zmc-day.zmc-none .zmc-num {
+            #${PANEL_ID} .zmc-chip {
+                max-width: 100%;
                 margin: 0;
-                height: 26px;
-                line-height: 26px;
-                min-width: 26px;
-                border-radius: 13px;
-                font-size: 16px;
-            }
-
-            #${PANEL_ID} .zmc-day.zmc-none .zmc-mon {
-                display: none;
-            }
-
-            #${PANEL_ID} .zmc-day.zmc-none .zmc-events {
-                padding: 0 6px;
-            }
-
-            #${PANEL_ID} .zmc-day.zmc-none:not(.zmc-today) {
-                box-shadow: none;
-                background: transparent;
-            }
-
-            #${PANEL_ID} .zmc-past .zmc-events {
-                opacity: 0.6;
-            }
-
-            /* ---- Udalost ---- */
-            #${PANEL_ID} .zmc-event {
-                --c: #34c759;
-
-                position: relative;
-                display: block;
-                width: 100%;
-                min-height: 46px;
-                margin: 0;
-                padding: 7px 10px 7px 13px;
+                padding: 5px 9px;
                 border: 0;
-                border-radius: 10px;
-                background: transparent;
-                color: var(--zmc-text);
-                text-align: left;
+                border-radius: 6px;
+                background: var(--c, ${DEFAULT_COLOR});
+                color: #ffffff;
                 font-family: inherit;
+                font-size: 14px;
+                font-weight: 500;
+                line-height: 1.25;
+                text-align: left;
+                overflow-wrap: anywhere;
                 cursor: pointer;
-                overflow: hidden;
                 -webkit-appearance: none;
                 appearance: none;
                 -webkit-tap-highlight-color: transparent;
                 touch-action: manipulation;
             }
 
-            #${PANEL_ID} .zmc-event::before {
-                content: "";
-                position: absolute;
-                inset: 0;
-                background: var(--c);
-                opacity: 0.16;
-                pointer-events: none;
+            #${PANEL_ID} .zmc-chip:active {
+                opacity: 0.7;
             }
 
-            #${PANEL_ID} .zmc-event::after {
-                content: "";
-                position: absolute;
-                left: 0;
-                top: 0;
-                bottom: 0;
-                width: 4px;
-                background: var(--c);
-                pointer-events: none;
-            }
-
-            #${PANEL_ID} .zmc-event:active {
-                transform: scale(0.985);
-            }
-
-            #${PANEL_ID} .zmc-event > * {
-                position: relative;
-                z-index: 1;
-            }
-
-            #${PANEL_ID} .zmc-time {
-                display: block;
-                font-size: 11px;
-                font-weight: 700;
-                letter-spacing: 0.02em;
-                text-transform: uppercase;
-                color: var(--zmc-muted);
-                margin-bottom: 2px;
-            }
-
-            #${PANEL_ID} .zmc-title {
-                display: -webkit-box;
-                -webkit-box-orient: vertical;
-                -webkit-line-clamp: 3;
-                overflow: hidden;
-                font-size: 14.5px;
-                font-weight: 600;
-                line-height: 1.25;
-                overflow-wrap: anywhere;
+            #${PANEL_ID} .zmc-t {
+                font-weight: 800;
+                margin-right: 3px;
             }
 
             #${PANEL_ID} .zmc-error {
-                padding: 12px;
+                padding: 14px;
                 color: #ff3b30;
                 font-size: 14px;
             }
@@ -343,16 +345,60 @@
         document.head.appendChild(style);
     }
 
-    function getPanel(calendar) {
+    /* ------------------------------------------------------------------ */
+    /* Panel                                                              */
+    /* ------------------------------------------------------------------ */
+
+    // Vrati kontajner so zoznamom dni. Panel (a v nom filter) sa vytvori
+    // len raz, aby pri prekresleni neprisiel filter o focus.
+    function ensureList(calendar) {
         let panel = document.getElementById(PANEL_ID);
+
+        if (panel && panel.previousElementSibling !== calendar) {
+            panel.remove();
+            panel = null;
+        }
 
         if (!panel) {
             panel = document.createElement('div');
             panel.id = PANEL_ID;
+
+            const bar = document.createElement('div');
+            bar.className = 'zmc-bar';
+
+            const input = document.createElement('input');
+            input.type = 'search';
+            input.className = 'zmc-filter';
+            input.placeholder = 'Filtrovať udalosti…';
+            input.autocomplete = 'off';
+            input.autocapitalize = 'off';
+            input.spellcheck = false;
+            input.setAttribute('enterkeyhint', 'search');
+            input.value = query;
+
+            input.addEventListener('input', function () {
+                query = input.value;
+                lastSignature = '';
+                buildCalendar();
+            });
+
+            const count = document.createElement('span');
+            count.className = 'zmc-count';
+
+            bar.appendChild(input);
+            bar.appendChild(count);
+
+            const list = document.createElement('div');
+            list.className = 'zmc-list';
+
+            panel.appendChild(bar);
+            panel.appendChild(list);
+
             calendar.insertAdjacentElement('afterend', panel);
+            lastSignature = '';
         }
 
-        return panel;
+        return panel.querySelector('.zmc-list');
     }
 
     function showError(message) {
@@ -360,13 +406,13 @@
         if (!calendar) return;
 
         installStyle();
-        const panel = getPanel(calendar);
-        panel.innerHTML = '';
+        const list = ensureList(calendar);
+        list.innerHTML = '';
 
         const error = document.createElement('div');
         error.className = 'zmc-error';
         error.textContent = message;
-        panel.appendChild(error);
+        list.appendChild(error);
 
         lastSignature = '';
     }
@@ -374,9 +420,9 @@
     // Rozdelenie udalosti do dni (vratane viacdnovych). End je exkluzivny.
     function groupByDay(events, dates) {
         const groups = {};
-        dates.forEach(d => { groups[d] = []; });
+        dates.forEach(function (d) { groups[d] = []; });
 
-        events.forEach(ev => {
+        events.forEach(function (ev) {
             if (!ev.start) return;
 
             const first = ev.start.clone().startOf('day');
@@ -397,97 +443,75 @@
             }
         });
 
-        Object.keys(groups).forEach(key => {
-            groups[key].sort((a, b) => a.start.valueOf() - b.start.valueOf());
+        Object.keys(groups).forEach(function (key) {
+            groups[key].sort(function (a, b) {
+                return a.start.valueOf() - b.start.valueOf();
+            });
         });
 
         return groups;
     }
 
-    function timeLabel(event, date) {
-        if (event.start.format('YYYY-MM-DD') !== date) return 'pokračuje';
-        if (event.allDay) return 'celý deň';
-        if (event.start.hasTime && event.start.hasTime()) {
-            const start = event.start.format('HH:mm');
-            const sameDay = event.end &&
-                event.end.format('YYYY-MM-DD') === date;
-            return sameDay ? start + ' – ' + event.end.format('HH:mm') : start;
+    function chipPrefix(event, date) {
+        if (event.start.format('YYYY-MM-DD') !== date) return '↪ ';
+
+        if (!event.allDay && event.start.hasTime && event.start.hasTime()) {
+            return event.start.format('HH:mm') + ' ';
         }
+
         return '';
     }
 
     function buildDay(date, dayEvents, today, originalLinks) {
         const dateObj = parseKey(date);
-        const dow = dateObj.getDay();
 
         const day = document.createElement('section');
-        day.className = 'zmc-day' +
-            (date === today ? ' zmc-today' : '') +
-            (date < today ? ' zmc-past' : '') +
-            (dow === 0 || dow === 6 ? ' zmc-weekend' : '') +
-            (!dayEvents.length ? ' zmc-none' : '');
+        day.className = 'zmc-day' + (date === today ? ' zmc-today' : '');
 
-        // Datum
         const label = document.createElement('div');
         label.className = 'zmc-date';
 
-        const wd = document.createElement('div');
-        wd.className = 'zmc-wd';
-        wd.textContent = dateObj.toLocaleDateString('sk-SK', { weekday: 'short' })
-            .replace('.', '');
-
         const num = document.createElement('div');
         num.className = 'zmc-num';
-        num.textContent = String(dateObj.getDate());
+        num.textContent = String(dateObj.getDate()).padStart(2, '0');
 
-        const mon = document.createElement('div');
-        mon.className = 'zmc-mon';
-        mon.textContent = dateObj.toLocaleDateString('sk-SK', { month: 'short' })
+        const wd = document.createElement('div');
+        wd.className = 'zmc-wd';
+        wd.textContent = dateObj
+            .toLocaleDateString('sk-SK', { weekday: 'short' })
             .replace('.', '');
 
-        label.appendChild(wd);
         label.appendChild(num);
-        label.appendChild(mon);
+        label.appendChild(wd);
         day.appendChild(label);
 
-        // Udalosti
         const list = document.createElement('div');
         list.className = 'zmc-events';
 
-        if (!dayEvents.length) {
-            const empty = document.createElement('div');
-            empty.className = 'zmc-empty';
-            empty.textContent = 'Bez udalostí';
-            list.appendChild(empty);
-        }
-
-        dayEvents.forEach(event => {
+        dayEvents.forEach(function (event) {
             const id = String(event.id || event._id || '');
             const title = event.title || event.description || 'Udalosť';
+            const color = event.backgroundColor || event.color || DEFAULT_COLOR;
 
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.className = 'zmc-event';
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'zmc-chip';
+            chip.style.setProperty('--c', color);
+            chip.style.color = textColorFor(color);
 
-            if (event.backgroundColor) {
-                button.style.setProperty('--c', event.backgroundColor);
-            }
+            const prefix = chipPrefix(event, date);
 
-            const time = timeLabel(event, date);
-
-            if (time) {
+            if (prefix) {
                 const t = document.createElement('span');
-                t.className = 'zmc-time';
-                t.textContent = time;
-                button.appendChild(t);
+                t.className = 'zmc-t';
+                t.textContent = prefix.trim();
+                chip.appendChild(t);
+                chip.appendChild(document.createTextNode(' '));
             }
 
-            const name = document.createElement('span');
-            name.className = 'zmc-title';
-            name.textContent = title;
-            button.appendChild(name);
+            chip.appendChild(document.createTextNode(title));
 
-            button.addEventListener('click', function () {
+            chip.addEventListener('click', function () {
                 const fresh = getCalendar();
                 const link = fresh && fresh.querySelector(
                     '.fc-event[reclinkid="' + id + '"]'
@@ -502,7 +526,7 @@
                 }
             });
 
-            list.appendChild(button);
+            list.appendChild(chip);
         });
 
         day.appendChild(list);
@@ -526,7 +550,7 @@
         const dates = Array.from(
             calendar.querySelectorAll('th.fc-day-header[data-date]')
         )
-            .map(h => h.getAttribute('data-date'))
+            .map(function (h) { return h.getAttribute('data-date'); })
             .filter(Boolean);
 
         if (!dates.length) {
@@ -539,26 +563,33 @@
         // Podpis: prekreslime len ked sa nieco zmenilo
         const signature = JSON.stringify([
             todayKey(),
+            query,
             dates,
-            events.map(e => [
-                e.id || e._id,
-                e.title,
-                e.start && e.start.format(),
-                e.end && e.end.format(),
-                e.allDay,
-                e.backgroundColor
-            ])
+            events.map(function (e) {
+                return [
+                    e.id || e._id,
+                    e.title,
+                    e.start && e.start.format(),
+                    e.end && e.end.format(),
+                    e.allDay,
+                    e.backgroundColor
+                ];
+            })
         ]);
 
-        if (existing && signature === lastSignature) return;
-        lastSignature = signature;
+        if (existing && existing.previousElementSibling === calendar &&
+            signature === lastSignature) {
+            return;
+        }
 
         installStyle();
-        const panel = getPanel(calendar);
-        panel.innerHTML = '';
+        const list = ensureList(calendar);
+        lastSignature = signature;
+
+        list.innerHTML = '';
 
         const originalLinks = {};
-        calendar.querySelectorAll('.fc-event[reclinkid]').forEach(link => {
+        calendar.querySelectorAll('.fc-event[reclinkid]').forEach(function (link) {
             const id = link.getAttribute('reclinkid');
             if (!(id in originalLinks)) originalLinks[id] = link;
         });
@@ -566,12 +597,30 @@
         const groups = groupByDay(events, dates);
         const today = todayKey();
 
-        dates.forEach(date => {
-            panel.appendChild(
-                buildDay(date, groups[date] || [], today, originalLinks)
-            );
+        let total = 0;
+        let shown = 0;
+
+        dates.forEach(function (date) {
+            const all = groups[date] || [];
+            const visible = all.filter(function (e) {
+                return matchesQuery(e.title || e.description || '');
+            });
+
+            total += all.length;
+            shown += visible.length;
+
+            list.appendChild(buildDay(date, visible, today, originalLinks));
         });
+
+        const count = document.querySelector('#' + PANEL_ID + ' .zmc-count');
+        if (count) {
+            count.textContent = query.trim() ? shown + ' / ' + total : '';
+        }
     }
+
+    /* ------------------------------------------------------------------ */
+    /* Spustenie                                                          */
+    /* ------------------------------------------------------------------ */
 
     function scheduleUpdate() {
         clearTimeout(updateTimer);
@@ -629,25 +678,6 @@
 
         document.addEventListener('visibilitychange', scheduleUpdate);
         window.addEventListener('orientationchange', scheduleUpdate);
-    }
-
-    // Horny banner "Otvorit v aplikacii Creator" je Safari Smart App Banner,
-    // ktory vznika z <meta name="apple-itunes-app">. Zahodime ho co najskor.
-    function removeAppBanner() {
-        const kill = function () {
-            document.querySelectorAll('meta[name="apple-itunes-app"]')
-                .forEach(function (m) { m.remove(); });
-        };
-
-        kill();
-
-        const mo = new MutationObserver(kill);
-        mo.observe(document.documentElement, { childList: true, subtree: true });
-
-        document.addEventListener('DOMContentLoaded', function () {
-            kill();
-            setTimeout(function () { mo.disconnect(); }, 5000);
-        });
     }
 
     removeAppBanner();
