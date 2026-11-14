@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho Calendar - mobilny tyzdenny prehlad
 // @namespace    zoho-calendar-tools
-// @version      2.6
+// @version      2.7
 // @description  Zvisly mobilny kalendar (iPhone Safari) ako v aplikacii, s filtrom
 // @match        https://creatorapp.zoho.com/michalbokovi/service-system/*
 // @run-at       document-start
@@ -25,10 +25,6 @@
     const THEME = 'auto';
 
     const DEFAULT_COLOR = '#6a67ae';
-
-    // true = posuva sa cela stranka (nie vnutorny panel), vdaka comu Safari
-    // pri posuvani samo schova spodnu listu. false = povodne spravanie.
-    const FULL_PAGE_SCROLL = true;
 
     let lastSignature = '';
     let observedCalendar = null;
@@ -135,23 +131,6 @@
 
     function eventColorInfo(event) {
         return colorInfo(event.backgroundColor || event.color);
-    }
-
-    // Safari schova spodnu listu len vtedy, ked sa posuva samotna stranka.
-    // Zoho ma vnutorny posuvny kontajner s pevnou vyskou, tak mu ju zrusime.
-    function unlockPageScroll() {
-        if (!FULL_PAGE_SCROLL) return;
-
-        const panel = document.getElementById(PANEL_ID);
-        if (!panel) return;
-
-        document.documentElement.classList.add('zmc-scroll');
-
-        for (let el = panel.parentElement; el; el = el.parentElement) {
-            el.style.setProperty('height', 'auto', 'important');
-            el.style.setProperty('max-height', 'none', 'important');
-            el.style.setProperty('overflow', 'visible', 'important');
-        }
     }
 
     function refresh() {
@@ -338,11 +317,6 @@
                 --zmc-field: #1c1c1e;
                 --zmc-accent: #0a84ff;
                 --zmc-today: rgba(10, 132, 255, 0.16);
-            }
-
-            html.zmc-scroll #${PANEL_ID} {
-                min-height: 100vh;
-                padding-bottom: calc(60px + env(safe-area-inset-bottom));
             }
 
             #${PANEL_ID} * {
@@ -675,8 +649,6 @@
         const calendar = getCalendar();
         const jq = getJq();
         if (!calendar || !jq) return;
-
-        unlockPageScroll();
 
         let events;
 
