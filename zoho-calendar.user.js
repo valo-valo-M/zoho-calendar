@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho Calendar - mobilny tyzdenny prehlad
 // @namespace    zoho-calendar-tools
-// @version      2.7
+// @version      2.8
 // @description  Zvisly mobilny kalendar (iPhone Safari) ako v aplikacii, s filtrom
 // @match        https://creatorapp.zoho.com/michalbokovi/service-system/*
 // @run-at       document-start
@@ -25,6 +25,10 @@
     const THEME = 'auto';
 
     const DEFAULT_COLOR = '#6a67ae';
+
+    // true = dole sa zobrazi rozbalovacia sekcia "Ladenie" s udajmi udalosti
+    // (na zistenie, ci su v kalendari aj dalsie polia, napr. popis problemu)
+    const DEBUG = true;
 
     let lastSignature = '';
     let observedCalendar = null;
@@ -131,6 +135,66 @@
 
     function eventColorInfo(event) {
         return colorInfo(event.backgroundColor || event.color);
+    }
+
+    let debugOpen = false;
+
+    function debugValue(v) {
+        if (v === null || v === undefined) return String(v);
+        if (typeof v === 'function') return '[function]';
+        if (typeof v.format === 'function') return v.format();
+
+        if (typeof v === 'object') {
+            try {
+                return JSON.stringify(v).slice(0, 200);
+            } catch (error) {
+                return '[object]';
+            }
+        }
+
+        return String(v).slice(0, 300);
+    }
+
+    function renderDebug(container, sample, originalLinks) {
+        const details = document.createElement('details');
+        details.className = 'zmc-debug';
+        details.open = debugOpen;
+        details.addEventListener('toggle', function () {
+            debugOpen = details.open;
+        });
+
+        const summary = document.createElement('summary');
+        summary.textContent = 'Ladenie: údaje udalostí';
+        details.appendChild(summary);
+
+        const out = [];
+
+        sample.forEach(function (e, i) {
+            out.push('--- udalosť ' + (i + 1) + ' ---');
+
+            Object.keys(e).forEach(function (k) {
+                if (k === 'source') return;
+                out.push(k + ': ' + debugValue(e[k]));
+            });
+
+            const link = originalLinks[String(e.id || e._id || '')];
+
+            if (link) {
+                out.push('[DOM odkaz]');
+
+                Array.from(link.attributes).forEach(function (a) {
+                    out.push('@' + a.name + ': ' + String(a.value).slice(0, 300));
+                });
+
+                out.push('text: ' + (link.textContent || '').trim().slice(0, 300));
+            }
+        });
+
+        const pre = document.createElement('pre');
+        pre.textContent = out.join('\n');
+        details.appendChild(pre);
+
+        container.appendChild(details);
     }
 
     function refresh() {
@@ -472,6 +536,21 @@
                 margin-right: 3px;
             }
 
+            #${PANEL_ID} .zmc-debug {
+                margin: 12px;
+                font-size: 12px;
+                color: var(--zmc-muted);
+            }
+
+            #${PANEL_ID} .zmc-debug pre {
+                margin: 8px 0 0;
+                white-space: pre-wrap;
+                overflow-wrap: anywhere;
+                font-size: 11px;
+                line-height: 1.35;
+                color: var(--zmc-text);
+            }
+
             #${PANEL_ID} .zmc-error {
                 padding: 14px;
                 color: #ff3b30;
@@ -742,6 +821,18 @@
 
             list.appendChild(buildDay(date, visible, today, originalLinks));
         });
+
+        if (DEBUG) {
+            const sample = [];
+
+            dates.forEach(function (d) {
+                (groups[d] || []).forEach(function (e) {
+                    if (sample.length < 3 && sample.indexOf(e) === -1) sample.push(e);
+                });
+            });
+
+            renderDebug(list, sample, originalLinks);
+        }
 
         const bar = document.querySelector('#' + PANEL_ID + ' .zmc-bar');
         if (bar) renderBar(bar, colors, shown, total);
