@@ -20,8 +20,9 @@
     const DARK_STYLE_ID = 'zoho-mobile-calendar-dark';
     const PANEL_ID = 'zoho-mobile-calendar';
 
-    // true = cela stranka Zoho v tmavom rezime, false = povodny svetly vzhlad
-    const DARK_MODE = true;
+    // 'auto'  = tmavy rezim podla nastavenia iPhonu (svetly cez den, tmavy v noci)
+    // 'dark'  = vzdy tmavy, 'light' = vzdy svetly
+    const THEME = 'auto';
 
     const DEFAULT_COLOR = '#34c759';
 
@@ -74,44 +75,6 @@
         return words.every(function (w) { return hay.indexOf(w) !== -1; });
     }
 
-    // Farba textu (biela / tmava) podla svetlosti pozadia stitku
-    const textColorCache = {};
-    let colorCtx = null;
-
-    function textColorFor(color) {
-        const key = color || DEFAULT_COLOR;
-        if (textColorCache[key]) return textColorCache[key];
-
-        let result = '#ffffff';
-
-        try {
-            if (!colorCtx) {
-                const canvas = document.createElement('canvas');
-                canvas.width = canvas.height = 1;
-                colorCtx = canvas.getContext('2d');
-            }
-
-            colorCtx.clearRect(0, 0, 1, 1);
-            colorCtx.fillStyle = '#000000';
-            colorCtx.fillStyle = key;
-            colorCtx.fillRect(0, 0, 1, 1);
-
-            const d = colorCtx.getImageData(0, 0, 1, 1).data;
-            const lin = function (v) {
-                v /= 255;
-                return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
-            };
-            const lum = 0.2126 * lin(d[0]) + 0.7152 * lin(d[1]) + 0.0722 * lin(d[2]);
-
-            result = lum > 0.4 ? '#111111' : '#ffffff';
-        } catch (error) {
-            result = '#ffffff';
-        }
-
-        textColorCache[key] = result;
-        return result;
-    }
-
     /* ------------------------------------------------------------------ */
     /* Tmavy rezim a banner                                               */
     /* ------------------------------------------------------------------ */
@@ -119,10 +82,23 @@
     // Zoho nema vlastny tmavy rezim, preto invertujeme farby celej stranky.
     // Obrazky, video a nas panel sa invertuju spat.
     function installDarkMode() {
-        if (!DARK_MODE) return;
-
         const root = document.documentElement;
-        root.classList.add('zmc-dark');
+        const mq = window.matchMedia
+            ? window.matchMedia('(prefers-color-scheme: dark)')
+            : null;
+
+        const apply = function () {
+            const dark = THEME === 'dark' ||
+                (THEME === 'auto' && !!mq && mq.matches);
+            root.classList.toggle('zmc-dark', dark);
+        };
+
+        apply();
+
+        if (mq) {
+            if (mq.addEventListener) mq.addEventListener('change', apply);
+            else if (mq.addListener) mq.addListener(apply);
+        }
 
         if (document.getElementById(DARK_STYLE_ID)) return;
 
@@ -220,9 +196,7 @@
 
             /* ---- Filter ---- */
             #${PANEL_ID} .zmc-bar {
-                position: sticky;
-                top: 0;
-                z-index: 5;
+                position: relative;
                 display: flex;
                 align-items: center;
                 gap: 8px;
@@ -309,13 +283,13 @@
             #${PANEL_ID} .zmc-chip {
                 max-width: 100%;
                 margin: 0;
-                padding: 5px 9px;
+                padding: 4px 8px;
                 border: 0;
                 border-radius: 6px;
                 background: var(--c, ${DEFAULT_COLOR});
                 color: #ffffff;
                 font-family: inherit;
-                font-size: 14px;
+                font-size: 12.5px;
                 font-weight: 500;
                 line-height: 1.25;
                 text-align: left;
@@ -453,7 +427,7 @@
     }
 
     function chipPrefix(event, date) {
-        if (event.start.format('YYYY-MM-DD') !== date) return '↪ ';
+        if (event.start.format('YYYY-MM-DD') !== date) return '← ';
 
         if (!event.allDay && event.start.hasTime && event.start.hasTime()) {
             return event.start.format('HH:mm') + ' ';
@@ -497,7 +471,6 @@
             chip.type = 'button';
             chip.className = 'zmc-chip';
             chip.style.setProperty('--c', color);
-            chip.style.color = textColorFor(color);
 
             const prefix = chipPrefix(event, date);
 
@@ -614,7 +587,7 @@
 
         const count = document.querySelector('#' + PANEL_ID + ' .zmc-count');
         if (count) {
-            count.textContent = query.trim() ? shown + ' / ' + total : '';
+            count.textContent = query.trim() ? shown + ' / ' + total : 'Udalostí: ' + total;
         }
     }
 
