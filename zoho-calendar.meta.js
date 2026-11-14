@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho Calendar - mobilny tyzdenny prehlad
 // @namespace    zoho-calendar-tools
-// @version      2.6
+// @version      2.7
 // @description  Zvisly mobilny kalendar s povodnymi Zoho zaznamami
 // @match        https://creatorapp.zoho.com/michalbokovi/service-system/*
 // @run-at       document-idle
