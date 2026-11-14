@@ -24,7 +24,7 @@
     // 'dark'  = vzdy tmavy, 'light' = vzdy svetly
     const THEME = 'auto';
 
-    const DEFAULT_COLOR = '#34c759';
+    const DEFAULT_COLOR = '#6a67ae';
 
     let query = '';
     let lastSignature = '';
