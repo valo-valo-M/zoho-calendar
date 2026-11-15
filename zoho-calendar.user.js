@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho Calendar - mobilny tyzdenny prehlad
 // @namespace    zoho-calendar-tools
-// @version      3.1
+// @version      3.2
 // @description  Zvisly mobilny kalendar (iPhone Safari) ako v aplikacii, s filtrom
 // @match        https://creatorapp.zoho.com/michalbokovi/service-system/*
 // @run-at       document-start
@@ -28,7 +28,7 @@
 
     // true = dole sa zobrazi rozbalovacia sekcia "Ladenie" s udajmi udalosti
     // (na zistenie, ci su v kalendari aj dalsie polia, napr. popis problemu)
-    const DEBUG = true;
+    const DEBUG = false;
 
     // true = pod nazvom udalosti sa zobrazi "Popis problemu od zakaznika"
     // (nacita sa zo zaznamu na pozadi, len pre zobrazene udalosti)
