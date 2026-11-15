@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho Calendar - mobilny tyzdenny prehlad
 // @namespace    zoho-calendar-tools
-// @version      2.8
+// @version      2.9
 // @description  Zvisly mobilny kalendar (iPhone Safari) ako v aplikacii, s filtrom
 // @match        https://creatorapp.zoho.com/michalbokovi/service-system/*
 // @run-at       document-start
@@ -137,63 +137,165 @@
         return colorInfo(event.backgroundColor || event.color);
     }
 
-    let debugOpen = false;
+    /* ------------------------------------------------------------------ */
+    /* Ladenie: zaznam sieťovych poziadaviek (na zistenie, odkial Zoho      */
+    /* nacitava detail zaznamu po tuknuti na udalost)                      */
+    /* ------------------------------------------------------------------ */
 
-    function debugValue(v) {
-        if (v === null || v === undefined) return String(v);
-        if (typeof v === 'function') return '[function]';
-        if (typeof v.format === 'function') return v.format();
+    const netLog = [];
 
-        if (typeof v === 'object') {
-            try {
-                return JSON.stringify(v).slice(0, 200);
-            } catch (error) {
-                return '[object]';
-            }
-        }
-
-        return String(v).slice(0, 300);
+    function maskSecrets(text) {
+        return String(text || '').replace(
+            /((?:zccpn|csrf[\w-]*|token[\w-]*|authtoken|sessionid|ticket)["']?\s*[=:]\s*["']?)([^&\s"',}]+)/gi,
+            '$1***'
+        );
     }
 
-    function renderDebug(container, sample, originalLinks) {
+    function pushNet(entry) {
+        if (/\.(js|css|png|jpe?g|gif|svg|woff2?|ttf|ico|map)(\?|$)/i.test(entry.url)) return;
+
+        netLog.push(entry);
+        while (netLog.length > 14) netLog.shift();
+    }
+
+    function installNetLog() {
+        if (!DEBUG) return;
+
+        const XHR = window.XMLHttpRequest;
+
+        if (XHR && XHR.prototype && !XHR.prototype.__zmcPatched) {
+            XHR.prototype.__zmcPatched = true;
+
+            const open = XHR.prototype.open;
+            const send = XHR.prototype.send;
+
+            XHR.prototype.open = function (method, url) {
+                this.__zmc = { method: String(method), url: String(url) };
+                return open.apply(this, arguments);
+            };
+
+            XHR.prototype.send = function (body) {
+                const info = this.__zmc;
+
+                if (info) {
+                    info.body = typeof body === 'string'
+                        ? body
+                        : (body ? '[' + typeof body + ']' : '');
+
+                    this.addEventListener('loadend', function () {
+                        let text = '';
+
+                        try {
+                            text = typeof this.responseText === 'string'
+                                ? this.responseText : '';
+                        } catch (error) {
+                            text = '';
+                        }
+
+                        pushNet({
+                            method: info.method,
+                            url: info.url,
+                            body: info.body,
+                            status: this.status,
+                            response: text
+                        });
+                    });
+                }
+
+                return send.apply(this, arguments);
+            };
+        }
+
+        if (window.fetch && !window.fetch.__zmcPatched) {
+            const orig = window.fetch;
+
+            const patched = function (input, init) {
+                const url = typeof input === 'string' ? input : ((input && input.url) || '');
+                const method = (init && init.method) || (input && input.method) || 'GET';
+                const body = init && typeof init.body === 'string' ? init.body : '';
+
+                return orig.apply(this, arguments).then(function (res) {
+                    try {
+                        res.clone().text().then(function (t) {
+                            pushNet({
+                                method: method,
+                                url: url,
+                                body: body,
+                                status: res.status,
+                                response: t
+                            });
+                        });
+                    } catch (error) {
+                        // ignorujeme
+                    }
+
+                    return res;
+                });
+            };
+
+            patched.__zmcPatched = true;
+            window.fetch = patched;
+        }
+    }
+
+    let debugOpen = false;
+
+    function short(text, max) {
+        return maskSecrets(String(text || '').replace(/\s+/g, ' ')).slice(0, max);
+    }
+
+    function renderDebug(container, sample) {
         const details = document.createElement('details');
         details.className = 'zmc-debug';
         details.open = debugOpen;
-        details.addEventListener('toggle', function () {
-            debugOpen = details.open;
-        });
 
         const summary = document.createElement('summary');
-        summary.textContent = 'Ladenie: údaje udalostí';
+        summary.textContent = 'Ladenie: sieťové požiadavky';
         details.appendChild(summary);
 
-        const out = [];
+        const note = document.createElement('div');
+        note.textContent = 'Ťukni na udalosť, zavri ju, potom tu ťukni na Obnoviť.';
+        details.appendChild(note);
 
-        sample.forEach(function (e, i) {
-            out.push('--- udalosť ' + (i + 1) + ' ---');
-
-            Object.keys(e).forEach(function (k) {
-                if (k === 'source') return;
-                out.push(k + ': ' + debugValue(e[k]));
-            });
-
-            const link = originalLinks[String(e.id || e._id || '')];
-
-            if (link) {
-                out.push('[DOM odkaz]');
-
-                Array.from(link.attributes).forEach(function (a) {
-                    out.push('@' + a.name + ': ' + String(a.value).slice(0, 300));
-                });
-
-                out.push('text: ' + (link.textContent || '').trim().slice(0, 300));
-            }
-        });
+        const refreshBtn = document.createElement('button');
+        refreshBtn.type = 'button';
+        refreshBtn.textContent = 'Obnoviť';
 
         const pre = document.createElement('pre');
-        pre.textContent = out.join('\n');
+
+        function update() {
+            const out = [];
+
+            out.push('ID udalostí: ' + sample.map(function (e) {
+                return String(e.id || e._id || '') + ' (' + (e.title || '') + ')';
+            }).join('; '));
+
+            out.push('');
+
+            if (!netLog.length) out.push('(zatiaľ žiadne požiadavky)');
+
+            netLog.forEach(function (n, i) {
+                out.push('#' + (i + 1) + ' ' + n.method + ' ' + n.status + ' ' +
+                    short(n.url, 400));
+
+                if (n.body) out.push('  telo: ' + short(n.body, 400));
+                if (n.response) out.push('  odpoveď: ' + short(n.response, 500));
+            });
+
+            pre.textContent = out.join('\n');
+        }
+
+        refreshBtn.addEventListener('click', update);
+
+        details.addEventListener('toggle', function () {
+            debugOpen = details.open;
+            if (details.open) update();
+        });
+
+        details.appendChild(refreshBtn);
         details.appendChild(pre);
 
+        update();
         container.appendChild(details);
     }
 
@@ -542,6 +644,17 @@
                 color: var(--zmc-muted);
             }
 
+            #${PANEL_ID} .zmc-debug button {
+                margin: 8px 0 0;
+                padding: 6px 12px;
+                border: 1px solid var(--zmc-line);
+                border-radius: 8px;
+                background: var(--zmc-field);
+                color: var(--zmc-text);
+                font-family: inherit;
+                font-size: 13px;
+            }
+
             #${PANEL_ID} .zmc-debug pre {
                 margin: 8px 0 0;
                 white-space: pre-wrap;
@@ -831,7 +944,7 @@
                 });
             });
 
-            renderDebug(list, sample, originalLinks);
+            renderDebug(list, sample);
         }
 
         const bar = document.querySelector('#' + PANEL_ID + ' .zmc-bar');
@@ -900,6 +1013,7 @@
         window.addEventListener('orientationchange', scheduleUpdate);
     }
 
+    installNetLog();
     removeAppBanner();
     installDarkMode();
     start();
