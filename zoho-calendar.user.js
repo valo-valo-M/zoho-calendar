@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho Calendar - mobilny tyzdenny prehlad
 // @namespace    zoho-calendar-tools
-// @version      2.9
+// @version      3.0
 // @description  Zvisly mobilny kalendar (iPhone Safari) ako v aplikacii, s filtrom
 // @match        https://creatorapp.zoho.com/michalbokovi/service-system/*
 // @run-at       document-start
@@ -29,6 +29,10 @@
     // true = dole sa zobrazi rozbalovacia sekcia "Ladenie" s udajmi udalosti
     // (na zistenie, ci su v kalendari aj dalsie polia, napr. popis problemu)
     const DEBUG = true;
+
+    // true = pod nazvom udalosti sa zobrazi "Popis problemu od zakaznika"
+    // (nacita sa zo zaznamu na pozadi, len pre zobrazene udalosti)
+    const SHOW_DESCRIPTION = true;
 
     let lastSignature = '';
     let observedCalendar = null;
@@ -138,6 +142,165 @@
     }
 
     /* ------------------------------------------------------------------ */
+    /* Popis problemu zo zaznamu                                          */
+    /* ------------------------------------------------------------------ */
+
+    const REPORT_NAME = 'Kalendar';
+    const DESC_LABEL = 'popis problemu';
+
+    const descCache = {};    // id -> text ('' = bez popisu)
+    const descFailed = {};   // id -> cas poslednej chyby
+    const descPending = {};
+    const descQueue = [];
+    const descLog = [];
+    let descActive = 0;
+    let descVersion = 0;
+
+    function normText(text) {
+        return String(text || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase();
+    }
+
+    function elementText(el) {
+        const clone = el.cloneNode(true);
+
+        clone.querySelectorAll('br').forEach(function (b) { b.replaceWith('\n'); });
+        clone.querySelectorAll('p, div, li, tr').forEach(function (b) { b.append('\n'); });
+
+        return clone.textContent
+            .split('\n')
+            .map(function (l) { return l.replace(/\s+/g, ' ').trim(); })
+            .filter(Boolean)
+            .join('\n');
+    }
+
+    // Z HTML detailu zaznamu vytiahne hodnotu pola "Popis problemu ..."
+    function extractDescription(html) {
+        const result = { found: false, text: '', snippet: '' };
+        if (!html) return result;
+
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const all = doc.body ? Array.from(doc.body.querySelectorAll('*')) : [];
+
+        let label = null;
+        let best = Infinity;
+
+        all.forEach(function (el) {
+            const t = normText(el.textContent).replace(/\s+/g, ' ').trim();
+
+            if (t.indexOf(DESC_LABEL) === 0 && t.length < 80 && t.length <= best) {
+                label = el;
+                best = t.length;
+            }
+        });
+
+        if (!label) {
+            const idx = normText(html).indexOf('popis');
+            result.snippet = idx === -1
+                ? html.slice(0, 300)
+                : html.slice(Math.max(0, idx - 100), idx + 500);
+            return result;
+        }
+
+        let valueEl = null;
+
+        for (let el = label, depth = 0; el && depth < 6; el = el.parentElement, depth++) {
+            const sib = el.nextElementSibling;
+            if (!sib) continue;
+
+            valueEl = sib;
+
+            if (!sib.textContent.replace(/[\s:]/g, '') && sib.nextElementSibling &&
+                sib.textContent.indexOf(':') !== -1) {
+                valueEl = sib.nextElementSibling;
+            }
+
+            break;
+        }
+
+        result.found = true;
+
+        if (valueEl) {
+            result.text = elementText(valueEl);
+        } else {
+            result.found = false;
+            result.snippet = label.outerHTML.slice(0, 400);
+        }
+
+        return result;
+    }
+
+    function loadDescription(id) {
+        const parts = location.pathname.split('/').filter(Boolean);
+        const base = '/' + parts.slice(0, 2).join('/');
+        const url = base + '/summary/' + REPORT_NAME + '/' +
+            encodeURIComponent(id) + '?parentViewType=2';
+
+        return fetch(url, {
+            credentials: 'same-origin',
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'application/json, text/javascript, */*; q=0.01'
+            },
+            __zmcInternal: true
+        })
+            .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function (data) {
+                return extractDescription(data && data.HTML);
+            });
+    }
+
+    function pumpDescriptions() {
+        while (descActive < 3 && descQueue.length) {
+            const id = descQueue.shift();
+            descActive++;
+
+            loadDescription(id)
+                .then(function (res) {
+                    descCache[id] = res.text;
+
+                    descLog.push(id + ' | pole ' + (res.found ? 'nájdené' : 'NENÁJDENÉ') +
+                        ' | ' + (res.found
+                            ? res.text.replace(/\s+/g, ' ').slice(0, 200)
+                            : res.snippet.replace(/\s+/g, ' ')));
+                })
+                .catch(function (error) {
+                    descFailed[id] = Date.now();
+                    descLog.push(id + ' | chyba: ' + (error && error.message));
+                })
+                .then(function () {
+                    while (descLog.length > 6) descLog.shift();
+
+                    delete descPending[id];
+                    descActive--;
+                    descVersion++;
+
+                    scheduleUpdate();
+                    pumpDescriptions();
+                });
+        }
+    }
+
+    function ensureDescriptions(ids) {
+        if (!SHOW_DESCRIPTION) return;
+
+        ids.forEach(function (id) {
+            if (!id || (id in descCache) || descPending[id]) return;
+            if (descFailed[id] && Date.now() - descFailed[id] < 60000) return;
+
+            descPending[id] = true;
+            descQueue.push(id);
+        });
+
+        pumpDescriptions();
+    }
+
+    /* ------------------------------------------------------------------ */
     /* Ladenie: zaznam sieťovych poziadaviek (na zistenie, odkial Zoho      */
     /* nacitava detail zaznamu po tuknuti na udalost)                      */
     /* ------------------------------------------------------------------ */
@@ -210,6 +373,8 @@
             const orig = window.fetch;
 
             const patched = function (input, init) {
+                if (init && init.__zmcInternal) return orig.apply(this, arguments);
+
                 const url = typeof input === 'string' ? input : ((input && input.url) || '');
                 const method = (init && init.method) || (input && input.method) || 'GET';
                 const body = init && typeof init.body === 'string' ? init.body : '';
@@ -281,6 +446,11 @@
                 if (n.body) out.push('  telo: ' + short(n.body, 400));
                 if (n.response) out.push('  odpoveď: ' + short(n.response, 500));
             });
+
+            out.push('');
+            out.push('Popisy:');
+            if (!descLog.length) out.push('(zatiaľ nič)');
+            descLog.forEach(function (l) { out.push('- ' + short(l, 600)); });
 
             pre.textContent = out.join('\n');
         }
@@ -633,6 +803,27 @@
                 opacity: 0.7;
             }
 
+            #${PANEL_ID} .zmc-head {
+                display: block;
+            }
+
+            #${PANEL_ID} .zmc-chip.zmc-has-desc {
+                flex: 1 1 100%;
+            }
+
+            #${PANEL_ID} .zmc-desc {
+                display: -webkit-box;
+                -webkit-box-orient: vertical;
+                -webkit-line-clamp: 4;
+                overflow: hidden;
+                margin-top: 4px;
+                font-size: 11.5px;
+                font-weight: 400;
+                line-height: 1.3;
+                white-space: pre-line;
+                opacity: 0.92;
+            }
+
             #${PANEL_ID} .zmc-t {
                 font-weight: 800;
                 margin-right: 3px;
@@ -803,17 +994,32 @@
             chip.className = 'zmc-chip';
             chip.style.setProperty('--c', color);
 
+            const head = document.createElement('span');
+            head.className = 'zmc-head';
+
             const prefix = chipPrefix(event, date);
 
             if (prefix) {
                 const t = document.createElement('span');
                 t.className = 'zmc-t';
                 t.textContent = prefix.trim();
-                chip.appendChild(t);
-                chip.appendChild(document.createTextNode(' '));
+                head.appendChild(t);
+                head.appendChild(document.createTextNode(' '));
             }
 
-            chip.appendChild(document.createTextNode(title));
+            head.appendChild(document.createTextNode(title));
+            chip.appendChild(head);
+
+            const desc = descCache[id];
+
+            if (SHOW_DESCRIPTION && desc) {
+                chip.classList.add('zmc-has-desc');
+
+                const d = document.createElement('span');
+                d.className = 'zmc-desc';
+                d.textContent = desc;
+                chip.appendChild(d);
+            }
 
             chip.addEventListener('click', function () {
                 const fresh = getCalendar();
@@ -869,6 +1075,7 @@
             todayKey(),
             filterMode,
             Array.from(customColors).sort(),
+            descVersion,
             dates,
             events.map(function (e) {
                 return [
@@ -924,6 +1131,7 @@
             .sort(function (a, b) { return b.count - a.count; });
 
         let shown = 0;
+        const visibleIds = [];
 
         dates.forEach(function (date) {
             const visible = (groups[date] || []).filter(function (e) {
@@ -932,8 +1140,14 @@
 
             shown += visible.length;
 
+            visible.forEach(function (e) {
+                visibleIds.push(String(e.id || e._id || ''));
+            });
+
             list.appendChild(buildDay(date, visible, today, originalLinks));
         });
+
+        ensureDescriptions(visibleIds);
 
         if (DEBUG) {
             const sample = [];
